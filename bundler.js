@@ -123,5 +123,13 @@ function watchFiles(entryFile, outputFile) {
   bundle(entryFile, outputFile);
 }
 
-// Start watching and bundling process
-watchFiles("./src/index.js", "./dist/bundle.js");
+// Main execution based on command line arguments
+const entryFile = "./src/index.js";
+const outputFile = "./dist/bundle.js";
+
+const args = process.argv.slice(2);
+if (args.includes("--watch")) {
+  watchFiles(entryFile, outputFile);
+} else {
+  bundle(entryFile, outputFile);
+}
