@@ -1,26 +1,40 @@
 const fs = require("fs");
 const path = require("path");
 
-function bundle(file, output) {
-  const alreadyBundled = new Set(); // Set, um bereits importierte Module zu verfolgen
-  const content = getContentOfFile(file);
-
-  const dependencies = getDependenciesOfContent(content, path.dirname(file));
-
-  const newContent = addResolvedDependenciesToContent(
-    removeDependenciesFromContent(content),
-    getDependencyContent(dependencies, alreadyBundled)
-  );
-
-  writeBundledFile(output, newContent);
+// Ensure the output directory exists
+function ensureDirectoryExists(dir) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
 }
 
-const getContentOfFile = (file) => {
-  const content = fs.readFileSync(file, "utf-8");
-  return content;
+// Main bundling function
+function bundle(entryFile, outputFile) {
+  const alreadyBundled = new Set();
+  const entryContent = readFileContent(entryFile);
+
+  const dependencies = findDependencies(entryContent, path.dirname(entryFile));
+
+  const bundledContent = combineDependenciesAndContent(
+    stripImports(entryContent),
+    loadDependencyContent(dependencies, alreadyBundled)
+  );
+
+  ensureDirectoryExists(path.dirname(outputFile));
+
+  const startTime = performance.now();
+  writeBundledFile(outputFile, bundledContent);
+  const endTime = performance.now();
+  const duration = endTime - startTime;
+  console.log(`Bundling completed in ${duration.toFixed(2)} ms`);
+}
+
+// Utility functions
+const readFileContent = (filePath) => {
+  return fs.readFileSync(filePath, "utf-8");
 };
 
-const getDependenciesOfContent = (content, baseDir) => {
+const findDependencies = (content, baseDir) => {
   const dependencies = [];
   const importRegex = /import\s+.*\s+from\s+['"](.*)['"]/g;
 
@@ -28,9 +42,8 @@ const getDependenciesOfContent = (content, baseDir) => {
   while ((match = importRegex.exec(content))) {
     let dependencyPath = match[1];
 
-    // Überprüfen, ob der Pfad bereits die Erweiterung ".js" hat
     if (!path.extname(dependencyPath)) {
-      dependencyPath += ".js"; // Erweiterung nur anhängen, wenn sie fehlt
+      dependencyPath += ".js";
     }
 
     const resolvedDependencyPath = path.resolve(baseDir, dependencyPath);
@@ -40,49 +53,75 @@ const getDependenciesOfContent = (content, baseDir) => {
   return dependencies;
 };
 
-const removeDependenciesFromContent = (content) => {
+const stripImports = (content) => {
   const importRegex = /import\s+.*\s+from\s+['"](.*)['"];/g;
-  const newContent = content.replace(importRegex, "").trim();
-  return newContent;
+  return content.replace(importRegex, "").trim();
 };
 
-const getDependencyContent = (dependencies, alreadyBundled) => {
+const loadDependencyContent = (dependencies, alreadyBundled) => {
   const dependencyContent = {};
 
   dependencies.forEach((dependency) => {
-    // Überspringen, wenn das Modul bereits importiert wurde
     if (alreadyBundled.has(dependency)) return;
 
-    const content = getContentOfFile(dependency);
+    const content = readFileContent(dependency);
+    const subDependencies = findDependencies(content, path.dirname(dependency));
 
-    const subDependencies = getDependenciesOfContent(
-      content,
-      path.dirname(dependency)
+    const resolvedContent = combineDependenciesAndContent(
+      stripImports(content),
+      loadDependencyContent(subDependencies, alreadyBundled)
     );
 
-    const resolvedContent = addResolvedDependenciesToContent(
-      removeDependenciesFromContent(content),
-      getDependencyContent(subDependencies, alreadyBundled)
-    );
-
-    // Markiere dieses Modul als gebündelt
     alreadyBundled.add(dependency);
-
     dependencyContent[dependency] = resolvedContent;
   });
 
   return dependencyContent;
 };
 
-const addResolvedDependenciesToContent = (content, dependencyContent) => {
-  const newContent =
-    Object.values(dependencyContent).join("\n") + "\n" + content.trim();
-  return newContent;
+const combineDependenciesAndContent = (content, dependencyContent) => {
+  return Object.values(dependencyContent).join("\n") + "\n" + content.trim();
 };
 
-const writeBundledFile = (output, bundledContent) => {
-  fs.writeFileSync(output, bundledContent);
+const writeBundledFile = (outputFile, bundledContent) => {
+  fs.writeFileSync(outputFile, bundledContent);
+  console.log(`Bundle written: ${outputFile}`);
 };
 
-// Start the bundling process
-bundle("./src/index.js", "./dist/bundle.js");
+// Format timestamp
+function formatTimestamp() {
+  const now = new Date();
+  return `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+}
+
+// Watch for file changes
+function watchFiles(entryFile, outputFile) {
+  const watchedFiles = new Set();
+
+  const watchAndBundle = (file) => {
+    if (!watchedFiles.has(file)) {
+      watchedFiles.add(file);
+
+      fs.watch(file, (eventType) => {
+        if (eventType === "change") {
+          const relativePath = path.relative(process.cwd(), file);
+          console.log(
+            `[${formatTimestamp()}] Change detected in: ./src/${relativePath}`
+          );
+          bundle(entryFile, outputFile);
+        }
+      });
+
+      const content = readFileContent(file);
+      const dependencies = findDependencies(content, path.dirname(file));
+
+      dependencies.forEach(watchAndBundle);
+    }
+  };
+
+  watchAndBundle(entryFile);
+  bundle(entryFile, outputFile);
+}
+
+// Start watching and bundling process
+watchFiles("./src/index.js", "./dist/bundle.js");
