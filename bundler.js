@@ -9,7 +9,7 @@ function ensureDirectoryExists(dir) {
 }
 
 // Main bundling function
-function bundle(entryFile, outputFile) {
+function bundle(entryFile, outputFile, showDiff = false) {
   const alreadyBundled = new Set();
   const entryContent = readFileContent(entryFile);
 
@@ -22,34 +22,42 @@ function bundle(entryFile, outputFile) {
 
   ensureDirectoryExists(path.dirname(outputFile));
 
+  const previousBundle = fs.existsSync(outputFile)
+    ? readFileContent(outputFile)
+    : "";
   const startTime = performance.now();
+
   writeBundledFile(outputFile, bundledContent);
   const endTime = performance.now();
   const duration = endTime - startTime;
   console.log(`Bundling completed in ${duration.toFixed(2)} ms`);
+
+  if (showDiff) {
+    const diffOutput = createDiff(previousBundle, bundledContent);
+    if (diffOutput) {
+      console.log("Changes detected:");
+      console.log(diffOutput);
+    } else {
+      console.log("No differences found.");
+    }
+  }
 }
 
 // Utility functions
-const readFileContent = (filePath) => {
-  return fs.readFileSync(filePath, "utf-8");
-};
+const readFileContent = (filePath) => fs.readFileSync(filePath, "utf-8");
 
 const findDependencies = (content, baseDir) => {
   const dependencies = [];
   const importRegex = /import\s+.*\s+from\s+['"](.*)['"]/g;
-
   let match;
   while ((match = importRegex.exec(content))) {
     let dependencyPath = match[1];
-
     if (!path.extname(dependencyPath)) {
       dependencyPath += ".js";
     }
-
     const resolvedDependencyPath = path.resolve(baseDir, dependencyPath);
     dependencies.push(resolvedDependencyPath);
   }
-
   return dependencies;
 };
 
@@ -60,42 +68,50 @@ const stripImports = (content) => {
 
 const loadDependencyContent = (dependencies, alreadyBundled) => {
   const dependencyContent = {};
-
   dependencies.forEach((dependency) => {
     if (alreadyBundled.has(dependency)) return;
-
     const content = readFileContent(dependency);
     const subDependencies = findDependencies(content, path.dirname(dependency));
-
     const resolvedContent = combineDependenciesAndContent(
       stripImports(content),
       loadDependencyContent(subDependencies, alreadyBundled)
     );
-
     alreadyBundled.add(dependency);
     dependencyContent[dependency] = resolvedContent;
   });
-
   return dependencyContent;
 };
 
-const combineDependenciesAndContent = (content, dependencyContent) => {
-  return Object.values(dependencyContent).join("\n") + "\n" + content.trim();
-};
+const combineDependenciesAndContent = (content, dependencyContent) =>
+  Object.values(dependencyContent).join("\n") + "\n" + content.trim();
 
 const writeBundledFile = (outputFile, bundledContent) => {
   fs.writeFileSync(outputFile, bundledContent);
   console.log(`Bundle written: ${outputFile}`);
 };
 
+const createDiff = (oldContent, newContent) => {
+  const oldLines = oldContent.split("\n");
+  const newLines = newContent.split("\n");
+
+  const diffLines = [];
+  oldLines.forEach((line, i) => {
+    if (line !== newLines[i]) {
+      diffLines.push(`- ${line}`);
+      diffLines.push(`+ ${newLines[i]}`);
+    }
+  });
+  return diffLines.length > 0 ? diffLines.join("\n") : null;
+};
+
 // Format timestamp
-function formatTimestamp() {
+const formatTimestamp = () => {
   const now = new Date();
   return `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
-}
+};
 
 // Watch for file changes
-function watchFiles(entryFile, outputFile) {
+function watchFiles(entryFile, outputFile, showDiff = false) {
   const watchedFiles = new Set();
 
   const watchAndBundle = (file) => {
@@ -106,9 +122,9 @@ function watchFiles(entryFile, outputFile) {
         if (eventType === "change") {
           const relativePath = path.relative(process.cwd(), file);
           console.log(
-            `[${formatTimestamp()}] Change detected in: ./src/${relativePath}`
+            `[${formatTimestamp()}] Change detected in: ./${relativePath}`
           );
-          bundle(entryFile, outputFile);
+          bundle(entryFile, outputFile, showDiff);
         }
       });
 
@@ -120,7 +136,7 @@ function watchFiles(entryFile, outputFile) {
   };
 
   watchAndBundle(entryFile);
-  bundle(entryFile, outputFile);
+  bundle(entryFile, outputFile, showDiff);
 }
 
 // Main execution based on command line arguments
@@ -128,8 +144,11 @@ const entryFile = "./src/index.js";
 const outputFile = "./dist/bundle.js";
 
 const args = process.argv.slice(2);
-if (args.includes("--watch")) {
-  watchFiles(entryFile, outputFile);
+const watchMode = args.includes("--watch");
+const diffMode = args.includes("--diff");
+
+if (watchMode) {
+  watchFiles(entryFile, outputFile, diffMode);
 } else {
-  bundle(entryFile, outputFile);
+  bundle(entryFile, outputFile, diffMode);
 }
